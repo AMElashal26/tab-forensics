@@ -1,0 +1,98 @@
+[
+  {
+    "window": 1,
+    "index": 1,
+    "title": "Home",
+    "url": "chrome://newtab/",
+    "domain": "chrome-internal",
+    "suspended": false
+  },
+  {
+    "window": 1,
+    "index": 2,
+    "title": "Example Documentation",
+    "url": "https://workona.com/suspended/#title=Example%20Documentation&url=https%3A%2F%2Fexample.com%2Fdocs",
+    "domain": "workona.com",
+    "suspended": true
+  },
+  {
+    "window": 1,
+    "index": 3,
+    "title": "Example Documentation",
+    "url": "https://example.com/docs",
+    "domain": "example.com",
+    "suspended": false
+  },
+  {
+    "window": 1,
+    "index": 4,
+    "title": "A Video",
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "domain": "youtube.com",
+    "suspended": false
+  },
+  {
+    "window": 1,
+    "index": 5,
+    "title": "A Video",
+    "url": "https://workona.com/suspended/#title=A%20Video&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ",
+    "domain": "workona.com",
+    "suspended": true
+  },
+  {
+    "window": 2,
+    "index": 1,
+    "title": "Nested suspender example",
+    "url": "https://workona.com/suspended/#title=chrome-extension%3A%2F%2Fnoogafoofpebimajpfpamcfhoaifemoa%2Fsuspended.html%23ttl%3DDeep%2520Link%26pos%3D0%26uri%3Dhttps%3A%2F%2Fexample.com%2Fdeep&url=chrome-extension%3A%2F%2Fnoogafoofpebimajpfpamcfhoaifemoa%2Fsuspended.html%23ttl%3DDeep%2520Link%26pos%3D0%26uri%3Dhttps%3A%2F%2Fexample.com%2Fdeep",
+    "domain": "workona.com",
+    "suspended": true
+  },
+  {
+    "window": 2,
+    "index": 2,
+    "title": "Empty suspender placeholder",
+    "url": "chrome-extension://noogafoofpebimajpfpamcfhoaifemoa/suspended.html#ttl=&pos=0&uri=",
+    "domain": "chrome-internal",
+    "suspended": true
+  },
+  {
+    "window": 2,
+    "index": 3,
+    "title": "Repo",
+    "url": "https://github.com/example/project/",
+    "domain": "github.com",
+    "suspended": false
+  },
+  {
+    "window": 2,
+    "index": 4,
+    "title": "Repo (duplicate with trailing slash)",
+    "url": "https://github.com/example/project",
+    "domain": "github.com",
+    "suspended": false
+  },
+  {
+    "window": 2,
+    "index": 5,
+    "title": "Local reading list export",
+    "url": "file:///Users/example/ReadingListExport/browse.html",
+    "domain": "local-file",
+    "suspended": false
+  },
+  {
+    "window": 3,
+    "index": 1,
+    "title": "Untitled",
+    "url": "https://x.com/example/status/1234567890",
+    "domain": "x.com",
+    "suspended": false
+  },
+  {
+    "window": 3,
+    "index": 2,
+    "title": "Same post, trailing slash before query",
+    "url": "https://x.com/example/status/1234567890/?ref=nav",
+    "domain": "x.com",
+    "suspended": false
+  }
+]

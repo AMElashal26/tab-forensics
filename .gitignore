@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# Privacy first.
+#
+# This tool reads every open tab, so its output is inherently sensitive. Real
+# exports are never committed: only synthetic fixtures under data/sample/ are.
+# ---------------------------------------------------------------------------
+
+# Real tab exports and archives
+tabs-*.md
+tabs-*.txt
+tab-restore-*.html
+tab-restore-*.txt
+tab-board-*.html
+*session*.json
+!data/sample/sample_session.json
+board-urls*.txt
+*-closed-duplicates*
+
+# Anything in the working output directory
+out/
+output/
+exports/
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs and scratch
+*.log
+scratch/
+tmp/
