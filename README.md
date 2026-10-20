@@ -204,6 +204,7 @@ tab-forensics/
 ├── docs/
 │   ├── WRITEUP.md           # engineering narrative and technical notes
 │   ├── CASE-STUDY.md        # interview-facing summary
+│   ├── INTERVIEW-NOTES.md   # Q&A talking points for discussing this work
 │   └── EXPERIMENT-LOG.md    # chronological record with measurements
 ├── data/
 │   └── sample/              # synthetic, anonymised fixtures (safe to commit)
@@ -282,6 +283,19 @@ committed.
 
 The redaction above exists so a reproduction can be demonstrated without publishing where anyone
 actually went, which is the part that matters and the part nobody else's business needs.
+
+---
+
+## Documentation
+
+| Document | For |
+|:---|:---|
+| [`README.md`](README.md) | What it does and how to run it |
+| [`docs/CASE-STUDY.md`](docs/CASE-STUDY.md) | The narrative: problem, findings, approach, results |
+| [`docs/WRITEUP.md`](docs/WRITEUP.md) | Engineering detail and technical notes |
+| [`docs/INTERVIEW-NOTES.md`](docs/INTERVIEW-NOTES.md) | Q&A talking points, organised by likely question |
+| [`docs/EXPERIMENT-LOG.md`](docs/EXPERIMENT-LOG.md) | Chronological record with raw measurements |
+| [`CHANGELOG.md`](CHANGELOG.md) | Version history |
 
 ---
 
