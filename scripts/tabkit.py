@@ -36,6 +36,12 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
+sys_path = os.path.dirname(os.path.abspath(__file__))
+if sys_path not in __import__("sys").path:
+    __import__("sys").path.insert(0, sys_path)
+
+import config as _config  # noqa: E402  (local module, imported by path)
+
 # --------------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------------- #
@@ -43,16 +49,70 @@ from typing import Iterable, Optional
 TAB = "\t"
 LF = "\n"
 
-#: Hosts / extension ids known to wrap a real URL inside a query parameter.
-SUSPENDER_MARKERS = (
-    "workona.com/suspended",
-    "noogafoofpebimajpfpamcfhoaifemoa",  # The Great Suspender
-    "plpkmjcnhhnpkblimgenmdhghfgghdpp",  # Marvelous Suspender
-    "suspended.html",
-)
+# --------------------------------------------------------------------------- #
+# Configuration
+#
+# Rules about *which* wrappers exist, what counts as a meaningless page and how
+# aggressively to deduplicate live in a config file, not in this module. That
+# keeps site-specific knowledge out of the source, lets one checkout serve
+# different setups, and means the public repository carries no list of the
+# sites any individual happens to browse.
+#
+# See tabkit.toml for the example file and the resolution order.
+# --------------------------------------------------------------------------- #
 
-#: Query parameters suspenders use to carry the original URL.
-CARRIER_PARAMS = ("uri", "url")
+_CFG: Optional[dict] = None
+
+
+def config(reload: bool = False) -> dict:
+    """Return the loaded configuration, reading it once per process."""
+    global _CFG
+    if _CFG is None or reload:
+        _CFG = _config.load(path=os.environ.get(_config.CONFIG_ENV_VAR) if reload else None)
+    return _CFG
+
+
+def config_warnings() -> list[str]:
+    """Warnings raised while loading config, for scripts to surface."""
+    return list(_config.WARNINGS)
+
+
+#: Environment variable that points the loader at a specific config file.
+CONFIG_ENV_VAR = _config.CONFIG_ENV_VAR
+
+
+def use_config_file(path: str, require: bool = True) -> None:
+    """Direct all subsequent config reads at ``path``.
+
+    With ``require=True`` a missing file raises, because an explicitly requested
+    config that silently fell back to defaults is worse than a hard failure.
+    """
+    expanded = os.path.expanduser(path)
+    if require and not os.path.isfile(expanded):
+        raise FileNotFoundError(f"config not found: {expanded}")
+    os.environ[CONFIG_ENV_VAR] = expanded
+    config(reload=True)
+
+
+def wrapper_markers() -> tuple[str, ...]:
+    """Substrings that identify a URL as a wrapper rather than a destination.
+
+    Read from config so that a setup-specific suspender can be described in
+    ``tabkit.local.toml`` instead of being hard-coded here.
+    """
+    matches = [d["match"].lower() for d in config()["wrapper"]["detector"]]
+    for key in ("extensions", "hosts"):
+        matches.extend(str(m).lower() for m in config()["wrapper"].get(key, []) or [])
+    return tuple(matches)
+
+
+def carrier_params() -> tuple[str, ...]:
+    """Query parameters a wrapper uses to carry the original URL."""
+    return tuple(config()["wrapper"]["carrier_params"])
+
+
+def max_unwrap_depth() -> int:
+    return int(config()["wrapper"]["max_depth"])
 
 _URL_SCHEME = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*)://([^/?#]*)(.*)$")
 _HOST = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://([^/?#]*)")
@@ -167,33 +227,53 @@ class Report:
 def is_suspended(url: str) -> bool:
     """True if ``url`` looks like a tab-suspender placeholder."""
     low = (url or "").lower()
-    return any(m in low for m in SUSPENDER_MARKERS)
+    return any(m in low for m in wrapper_markers())
 
 
 def unwrap_once(url: str) -> Optional[str]:
-    """Peel a single suspender layer, or return ``None`` if there is none."""
-    if "#" not in url:
-        return None
-    fragment = url.split("#", 1)[1]
-    params: dict[str, str] = {}
-    for part in fragment.split("&"):
-        if "=" in part:
-            k, v = part.split("=", 1)
-            params[k] = v
-    for carrier in CARRIER_PARAMS:
-        if carrier in params and params[carrier]:
-            return urllib.parse.unquote(params[carrier])
+    """Peel a single wrapper layer, or return ``None`` if there is none.
+
+    Carrier parameters are looked for in the fragment *and* the query string.
+    Suspender extensions put them in the fragment, but a configurable wrapper
+    (see ``wrapper.detector``) may equally use the query string, and a wrapper
+    that silently failed to resolve would be exactly the kind of quiet
+    data-loss bug this toolkit exists to prevent.
+    """
+    carriers = carrier_params()
+
+    if "#" in url:
+        params: dict[str, str] = {}
+        for part in url.split("#", 1)[1].split("&"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                params[k] = v
+        for carrier in carriers:
+            if params.get(carrier):
+                return urllib.parse.unquote(params[carrier])
+
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.query:
+        query = urllib.parse.parse_qs(parsed.query)
+        for carrier in carriers:
+            values = query.get(carrier)
+            if values and values[0]:
+                return urllib.parse.unquote(values[0])
+
     return None
 
 
-def resolve_target(url: str, max_depth: int = 5) -> str:
-    """Fully unwrap nested suspender URLs back to the real destination.
+def resolve_target(url: str, max_depth: Optional[int] = None) -> str:
+    """Fully unwrap nested wrapper URLs back to the real destination.
 
-    Handles the case of two suspenders installed simultaneously, which produces
-    a Great Suspender URL nested inside a Workona URL (and vice versa).
+    Handles the case of two suspenders installed simultaneously, which nests one
+    wrapper's URL inside the other's (and vice versa).
+
+    ``max_depth`` defaults to ``wrapper.max_depth`` from config.
     """
     if not url:
         return url
+    if max_depth is None:
+        max_depth = max_unwrap_depth()
     seen = {url}
     current = url
     for _ in range(max_depth):
@@ -218,26 +298,124 @@ def normalize_url(url: str) -> Optional[str]:
     u = url.strip()
     low = u.lower()
 
-    if low.startswith("chrome://newtab") or low.startswith("chrome://new-tab-page"):
+    # Deliberately NOT redacted here. normalize_url produces the deduplication
+    # key, and a key that hides the account-name segment would make two distinct
+    # local files collide. Redaction belongs at export time only; see
+    # render_shareable_markdown().
+    if low.startswith("file://"):
+        return u
+
+    meaningless = tuple(config()["dedupe"]["meaningless_prefixes"])
+    if any(low.startswith(p.lower()) for p in meaningless):
         return None
     if low.startswith("chrome-extension://") and is_suspended(low):
         return None
-    if low.startswith("file://"):
-        return u
     if low.startswith("chrome://") or low.startswith("chrome-extension://"):
         return low
 
     m = _URL_SCHEME.match(u)
     if m:
         scheme, host, rest = m.group(1).lower(), m.group(2).lower(), m.group(3)
+        # Opt-in: collapsing www. variants reduces duplicate count, but it
+        # changes construction of existing keys, so it is off by default.
+        if config()["dedupe"].get("strip_www_prefix") and host.startswith("www."):
+            host = host[4:]
         if rest.endswith("/"):
             rest = rest[:-1]
-        elif "/?" in rest:
+        elif "/?" in rest and config()["dedupe"]["collapse_trailing_slash_before_query"]:
             # Collapse a trailing slash that sits immediately before a query
             # string, so /a/?b=1 and /a?b=1 dedupe to the same key.
             rest = rest.replace("/?", "?", 1)
         return f"{scheme}://{host}{rest}"
     return u
+
+
+def _should_redact_local() -> bool:
+    return bool(config()["privacy"].get("redact_local_paths", True))
+
+
+def _redact_local_path(url: str) -> str:
+    """Replace the account-name segment of a file:// URL with a placeholder.
+
+    ``file:///Users/someone/Desktop/a.png`` reveals a short account name even
+    when the file itself is unremarkable. Redacting the segment keeps the path
+    shape reviewable while removing the identifier.
+    """
+    placeholder = config()["privacy"].get("local_path_placeholder", "<user>")
+    home = os.path.expanduser("~")
+    home_name = os.path.basename(home)
+    if home_name and home_name in url:
+        return url.replace("/" + home_name + "/", "/" + placeholder + "/")
+    return url
+
+
+def redact_hosts(url: str, mapping: Optional[dict] = None) -> str:
+    """Replace configured hosts with stable placeholders.
+
+    Used by :func:`render_shareable_markdown` so a shared artifact demonstrates
+    technique without disclosing which sites were visited.
+    """
+    hosts = config()["privacy"].get("redact_hosts", []) or []
+    mapping = mapping if mapping is not None else {}
+
+    for host in hosts:
+        host = str(host).lower()
+        if host in url.lower():
+            if host not in mapping:
+                mapping[host] = f"host-{len(mapping) + 1}.redacted"
+            idx = url.lower().find(host)
+            url = url[:idx] + mapping[host] + url[idx + len(host):]
+
+    # Local-path redaction is independent of the host list. Returning early when
+    # no hosts were configured would silently skip it, leaving the account name
+    # in every file:// URL.
+    return _redact_local_path(url) if _should_redact_local() else url
+
+
+def render_shareable_markdown(report: "Report", title: str) -> tuple[str, int]:
+    """Render an archive with configured hosts and local paths redacted.
+
+    Returns the markdown and the number of tabs whose host was replaced.
+    """
+    mapping: dict[str, str] = {}
+    redacted = 0
+
+    # Headings are built from constants only; never from tab content, so an
+    # unredacted title can never reach the output through a heading.
+    lines = [
+        f"# {title}",
+        "",
+        "> Hosts listed in `privacy.redact_hosts` and local account paths have been",
+        "> replaced. Window and tab counts are unreduced.",
+        "",
+        f"Windows: {report.summary()['windows']}",
+        f"Tabs: {report.total}",
+        "",
+    ]
+
+    for w, tabs in report.windows().items():
+        lines.append(f"## Window {w}")
+        lines.append("")
+        for t in tabs:
+            # Titles matter as much as URLs: a suspended tab's title is
+            # "<page title> · <full URL>", so redacting only the link would
+            # leave the host spelled out in plain sight next to it.
+            url_before, url_after = t.url, redact_hosts(t.url, mapping)
+            title_before, title_after = t.title, redact_hosts(t.title, mapping)
+            if url_after != url_before or title_after != title_before:
+                redacted += 1
+            lines.append(f"1. [{escape_md(title_after)}]({url_after})")
+        lines.append("")
+
+    lines.append("## Redaction summary")
+    lines.append("")
+    if mapping:
+        lines.append(f"* {len(mapping)} distinct hosts were replaced with placeholders.")
+        lines.append(f"* {redacted} tabs contained at least one of them.")
+    else:
+        lines.append("* No hosts matched `privacy.redact_hosts`; nothing was redacted.")
+    lines.append("")
+    return LF.join(lines), redacted
 
 
 def domain_of(url: str) -> str:
@@ -301,8 +479,13 @@ def _window_dump_script(window: int) -> str:
         "\n".join(
             [
                 'set out to ""',
-                "set tb to tab",
-                "set lf to linefeed",
+                # NOTE: `tab` must NOT be used as a variable name here. Inside a
+                # `tell application "Google Chrome"` block, `tab` resolves to
+                # Chrome's own `tab` class rather than the tab character, and
+                # silently coerces to an empty string, producing titles glued to
+                # their URLs with no separator. Use character ids instead.
+                "set tb to (ASCII character 9)",
+                "set lf to (ASCII character 10)",
                 f"set tL to title of every tab of window {window}",
                 f"set uL to URL of every tab of window {window}",
                 "set tc to count of tL",

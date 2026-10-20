@@ -86,7 +86,25 @@ def main(argv=None) -> int:
     ap.add_argument("--board", metavar="HTML", help="write an interactive restore board")
     ap.add_argument("--json", action="store_true", help="emit the report as JSON")
     ap.add_argument("--stamp", default=date.today().isoformat(), help="date stamp for filenames")
+    ap.add_argument(
+        "--shareable",
+        metavar="MD",
+        help="write a redacted archive safe to show to others; hosts listed in "
+             "privacy.redact_hosts and local account paths are replaced",
+    )
+    ap.add_argument("--config", metavar="TOML", help="explicit config file to use")
     args = ap.parse_args(argv)
+
+    # An explicit --config wins over auto-discovery and fails loudly if absent,
+    # so a typo cannot silently fall back to defaults.
+    if args.config:
+        try:
+            tabkit.use_config_file(args.config)
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    for warning in tabkit.config_warnings():
+        print(f"config: {warning}", file=sys.stderr)
 
     report = tabkit.read_session()
     if not report.tabs:
@@ -116,6 +134,19 @@ def main(argv=None) -> int:
         md = tabkit.render_markdown(report, f"Tab Archive - {args.stamp}")
         tabkit.write_text(args.archive, md)
         print(f"archive   {args.archive}  ({os.path.getsize(args.archive)} bytes)")
+    if args.shareable:
+        md, redacted = tabkit.render_shareable_markdown(report, f"Session audit {args.stamp}")
+        tabkit.write_text(args.shareable, md)
+        print(
+            f"shareable {args.shareable}  ({os.path.getsize(args.shareable)} bytes, "
+            f"{redacted} hosts redacted)"
+        )
+        if redacted == 0:
+            print(
+                "  note: nothing was redacted. Set privacy.redact_hosts in your "
+                "config before sharing this file.",
+                file=sys.stderr,
+            )
     if args.board:
         build_board.write_board(
             report.tabs,

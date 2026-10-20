@@ -193,14 +193,17 @@ session.
 tab-forensics/
 ├── scripts/
 │   ├── tabkit.py            # library: resolution, normalization, Chrome bridge, metrics
-│   ├── session_audit.py     # read-only audit + archive
+│   ├── config.py            # TOML config loader + defaults
+│   ├── session_audit.py     # read-only audit + archive + shareable export
 │   ├── close_duplicates.py  # archive-first duplicate removal
 │   ├── open_batch.py        # paced batch reopening
 │   └── build_board.py       # HTML restore board generator
+├── tabkit.toml              # example rules file (committed; safe to share)
 ├── tests/
-│   └── test_tabkit.py       # 43 tests
+│   └── test_tabkit.py       # 59 tests
 ├── docs/
 │   ├── WRITEUP.md           # engineering narrative and technical notes
+│   ├── CASE-STUDY.md        # interview-facing summary
 │   └── EXPERIMENT-LOG.md    # chronological record with measurements
 ├── data/
 │   └── sample/              # synthetic, anonymised fixtures (safe to commit)
@@ -210,11 +213,75 @@ tab-forensics/
 
 ---
 
+## Configuration
+
+All rules live in a TOML file, not in the source. That keeps site-specific knowledge out of the
+code, lets one checkout serve different setups, and means this repository ships **no list of the
+sites any individual browses.**
+
+```bash
+cp tabkit.toml tabkit.local.toml   # git-ignored; edit freely
+```
+
+Resolution order, highest priority first:
+
+| Priority | Location |
+|:---|:---|
+| 1 | `$TABKIT_CONFIG` |
+| 2 | `./tabkit.local.toml` |
+| 3 | `~/.config/tabkit/config.toml` |
+| 4 | Built-in defaults |
+
+Every key is optional and **a missing or malformed file is never fatal** — the defaults are used and
+a warning is printed. Asking for a specific file with `--config` *is* fatal when absent, because an
+explicitly requested config that silently fell back to defaults is worse than a hard failure.
+
+```toml
+[wrapper]
+carrier_params = ["uri", "url"]      # params that carry the wrapped URL
+max_depth = 5                        # nesting limit
+
+[[wrapper.detector]]                 # any wrapper you meet can be described here
+name = "internal_portal"
+match = "portal.internal/wrap"
+
+[privacy]
+redact_hosts = ["wiki.internal"]      # replaced in shareable exports
+redact_local_paths = true
+
+[open]
+default_batch = 20                   # tabs per reopen batch
+per_tab_delay_seconds = 0.35
+
+[limits]
+max_close_fraction = 0.40            # abort a close above this share of the session
+```
+
+Because `carrier_params` and the detectors are configurable, the unwrapper is not limited to the
+suspenders it shipped with: any wrapper can be described and resolved, in the fragment **or** the
+query string.
+
+### Sharing a session safely
+
+```bash
+python3 scripts/session_audit.py --shareable tabs-shareable.md
+```
+
+Replaces every host listed in `privacy.redact_hosts` with a stable placeholder and hides the account
+segment of local paths. It redacts **titles as well as URLs** — a suspended tab's title is
+`<page title> · <full URL>`, so sanitising only the link leaves the host in plain sight beside it.
+
+---
+
 ## Privacy note
 
 This tool reads **every open tab**, so its output is sensitive by nature. The repo therefore ships
-only **synthetic** fixtures under `data/sample/`. Real exports are excluded by `.gitignore`.
-The author's own reference dataset was deliberately never committed.
+only **synthetic** fixtures under `data/sample/`. Real exports, local config and shareable exports
+are all excluded by `.gitignore`. The author's own reference dataset was deliberately never
+committed.
+
+The redaction above exists so a reproduction can be demonstrated without publishing where anyone
+actually went, which is the part that matters and the part nobody else's business needs.
 
 ---
 

@@ -21,10 +21,47 @@ sys.path.insert(0, SCRIPTS)
 
 import build_board  # noqa: E402
 import close_duplicates  # noqa: E402
+import config  # noqa: E402
 import tabkit  # noqa: E402
 
 GREAT_SUSPENDER = "noogafoofpebimajpfpamcfhoaifemoa"
 MARVELOUS = "plpkmjcnhhnpkblimgenmdhghfgghdpp"
+
+
+class TestAppleScriptSeparatorSafety(unittest.TestCase):
+    """Guard against a silent, whole-session data-loss bug.
+
+    Inside a `tell application "Google Chrome"` block, the identifiers `tab`
+    and `linefeed` are resolved against Chrome's own scripting dictionary: `tab`
+    is the *tab class*, not the tab character. Assigning it to a variable made
+    AppleScript coerce a class reference to an empty string, so every row was
+    emitted as `title||url` with no separator at all.
+
+    Nothing raised. The failure surfaced only as zero parsed URLs across an
+    entire session (879 tabs) while individual per-tab reads looked fine.
+    """
+
+    def test_separator_uses_explicit_character_ids(self):
+        src = tabkit._window_dump_script(1)
+        self.assertIn("ASCII character 9", src)
+        self.assertIn("ASCII character 10", src)
+
+    def test_does_not_bind_the_tab_class_as_a_variable(self):
+        src = tabkit._window_dump_script(1)
+        for line in src.splitlines():
+            stripped = line.strip()
+            self.assertNotEqual(
+                stripped,
+                "set tb to tab",
+                "`tab` resolves to Chrome's tab class inside a tell block and "
+                "silently becomes an empty string",
+            )
+
+    def test_parse_requires_the_separator_to_recover_a_url(self):
+        """The parser must treat a separator-less line as title-only, which is
+        exactly the symptom that made the original bug visible."""
+        glued = "Some Page Titlehttps://example.com/page"
+        self.assertNotIn(tabkit.TAB, glued)
 
 
 class TestSuspendResolution(unittest.TestCase):
@@ -73,7 +110,7 @@ class TestSuspendResolution(unittest.TestCase):
         self.assertEqual(tabkit.resolve_target(double), "https://docs.github.com/en")
 
     def test_plain_url_untouched(self):
-        url = "https://github.com/AMElashal26/safari-reading-list"
+        url = "https://github.com/example-user/example-repo"
         self.assertEqual(tabkit.resolve_target(url), url)
 
     def test_resolution_is_idempotent(self):
@@ -354,6 +391,185 @@ class TestBoardGeneration(unittest.TestCase):
         html = build_board.build_board([tabkit.Tab(window=1, index=1, title="D", raw_url=wrapped)])
         self.assertIn("https://docs.github.com/en", html)
         self.assertNotIn("workona.com/suspended", html)
+
+
+class TestConfig(unittest.TestCase):
+    """The rules live in a file, so the file's failure modes are behaviour."""
+
+    def setUp(self):
+        self._saved = os.environ.pop("TABKIT_CONFIG", None)
+
+    def tearDown(self):
+        if self._saved is not None:
+            os.environ["TABKIT_CONFIG"] = self._saved
+        else:
+            os.environ.pop("TABKIT_CONFIG", None)
+
+    def _write(self, tmp, body):
+        path = os.path.join(tmp, "tabkit.local.toml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        return path
+
+    def test_runs_with_no_config_at_all(self):
+        """A fresh clone with no config must still work. This is the single
+        most important property of the config layer."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = config.load(cwd=tmp)
+        self.assertTrue(cfg["wrapper"]["detector"])
+        self.assertEqual(cfg["wrapper"]["carrier_params"], ["uri", "url"])
+        self.assertFalse(config.WARNINGS)
+
+    def test_partial_override_inherits_other_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, '[open]\ndefault_batch = 7\n')
+            cfg = config.load(cwd=tmp)
+        self.assertEqual(cfg["open"]["default_batch"], 7)
+        # Untouched sibling survives.
+        self.assertEqual(cfg["open"]["per_tab_delay_seconds"], 0.35)
+        # Untouched section survives.
+        self.assertEqual(cfg["wrapper"]["max_depth"], 5)
+
+    def test_malformed_config_warns_instead_of_crashing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "not valid = = toml [[[\n")
+            cfg = config.load(cwd=tmp)
+        self.assertTrue(cfg, "must still return usable defaults")
+        self.assertTrue(config.WARNINGS, "a bad config must be reported")
+
+    def test_explicit_missing_path_is_an_error(self):
+        """Asking for a specific file is different from auto-discovery."""
+        with self.assertRaises(FileNotFoundError):
+            config.load(path="/nonexistent/definitely-not-here.toml")
+
+    def test_invalid_values_are_coerced_with_warnings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, '[limits]\nmax_close_fraction = 99\n')
+            cfg = config.load(cwd=tmp)
+        self.assertEqual(cfg["limits"]["max_close_fraction"], 0.4)
+        self.assertTrue(any("max_close_fraction" in w for w in config.WARNINGS))
+
+    def test_carrier_params_come_from_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, '[wrapper]\ncarrier_params = ["target"]\n')
+            cfg = config.load(cwd=tmp)
+        self.assertEqual(cfg["wrapper"]["carrier_params"], ["target"])
+
+    def test_custom_wrapper_in_fragment_resolves(self):
+        wrapped = "https://myapp.internal/wrap#dest=https%3A%2F%2Fexample.com%2Freport"
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(
+                tmp,
+                '[wrapper]\ncarrier_params = ["dest"]\n\n'
+                '[[wrapper.detector]]\nname = "w"\nmatch = "myapp.internal/wrap"\n',
+            )
+            os.environ["TABKIT_CONFIG"] = os.path.join(tmp, "tabkit.local.toml")
+            try:
+                tabkit.config(reload=True)
+                self.assertTrue(tabkit.is_suspended(wrapped))
+                self.assertEqual(tabkit.resolve_target(wrapped), "https://example.com/report")
+            finally:
+                os.environ.pop("TABKIT_CONFIG", None)
+                tabkit.config(reload=True)
+
+    def test_custom_wrapper_in_query_string_resolves(self):
+        """A configurable wrapper may carry the target in the query string.
+        Only reading the fragment would silently fail to resolve it."""
+        wrapped = "https://myapp.internal/wrap?dest=https%3A%2F%2Fexample.com%2Freport"
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(
+                tmp,
+                '[wrapper]\ncarrier_params = ["dest"]\n\n'
+                '[[wrapper.detector]]\nname = "w"\nmatch = "myapp.internal/wrap"\n',
+            )
+            os.environ["TABKIT_CONFIG"] = os.path.join(tmp, "tabkit.local.toml")
+            try:
+                tabkit.config(reload=True)
+                self.assertEqual(tabkit.resolve_target(wrapped), "https://example.com/report")
+            finally:
+                os.environ.pop("TABKIT_CONFIG", None)
+                tabkit.config(reload=True)
+
+    def test_redaction_replaces_configured_host(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, '[privacy]\nredact_hosts = ["secret.example.com"]\n')
+            os.environ["TABKIT_CONFIG"] = os.path.join(tmp, "tabkit.local.toml")
+            try:
+                tabkit.config(reload=True)
+                out = tabkit.redact_hosts("https://secret.example.com/wiki/onboarding")
+                self.assertNotIn("secret.example.com", out)
+                self.assertIn("/wiki/onboarding", out)
+            finally:
+                os.environ.pop("TABKIT_CONFIG", None)
+                tabkit.config(reload=True)
+
+    def test_redaction_map_does_not_leak_the_real_host(self):
+        """The shareable report must not name the hosts it redacted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, '[privacy]\nredact_hosts = ["secret.example.com"]\n')
+            os.environ["TABKIT_CONFIG"] = os.path.join(tmp, "tabkit.local.toml")
+            try:
+                tabkit.config(reload=True)
+                rep = tabkit.Report(
+                    tabs=[
+                        tabkit.Tab(
+                            window=1, index=1, title="T",
+                            raw_url="https://secret.example.com/wiki/onboarding",
+                        )
+                    ]
+                )
+                md, redacted = tabkit.render_shareable_markdown(rep, "Test")
+                self.assertEqual(redacted, 1)
+                self.assertNotIn("secret.example.com", md)
+            finally:
+                os.environ.pop("TABKIT_CONFIG", None)
+                tabkit.config(reload=True)
+
+    def test_redaction_covers_titles_not_just_urls(self):
+        """A suspended tab's title is "<page title> · <full URL>". Redacting
+        only the link left the host spelled out next to it -- a leak that survived
+        a URL-only check."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, '[privacy]\nredact_hosts = ["secret.example.com"]\n')
+            os.environ["TABKIT_CONFIG"] = os.path.join(tmp, "tabkit.local.toml")
+            try:
+                tabkit.config(reload=True)
+                leaky_title = "Some Page · https://secret.example.com/wiki/onboarding"
+                rep = tabkit.Report(
+                    tabs=[
+                        tabkit.Tab(
+                            window=1, index=1, title=leaky_title,
+                            raw_url="https://secret.example.com/wiki/onboarding",
+                        )
+                    ]
+                )
+                md, redacted = tabkit.render_shareable_markdown(rep, "Test")
+                self.assertNotIn("secret.example.com", md)
+                self.assertEqual(redacted, 1)
+            finally:
+                os.environ.pop("TABKIT_CONFIG", None)
+                tabkit.config(reload=True)
+
+    def test_redaction_covers_local_account_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, '[privacy]\nredact_local_paths = true\n')
+            os.environ["TABKIT_CONFIG"] = os.path.join(tmp, "tabkit.local.toml")
+            try:
+                tabkit.config(reload=True)
+                account = os.path.basename(os.path.expanduser("~"))
+                out = tabkit.redact_hosts(f"file:///Users/{account}/Desktop/x.png")
+                self.assertNotIn(account, out)
+                self.assertIn("<user>", out)
+            finally:
+                os.environ.pop("TABKIT_CONFIG", None)
+                tabkit.config(reload=True)
+
+    def test_dedupe_key_is_not_redacted(self):
+        """Redaction must never touch normalize_url: two distinct local files
+        would otherwise collide and one would be discarded as a duplicate."""
+        a = tabkit.normalize_url("file:///Users/alice/Desktop/a.html")
+        b = tabkit.normalize_url("file:///Users/bob/Desktop/a.html")
+        self.assertNotEqual(a, b)
 
 
 if __name__ == "__main__":

@@ -88,7 +88,10 @@ def main(argv=None) -> int:
     ap.add_argument("--apply", action="store_true", help="actually close tabs (default: dry run)")
     ap.add_argument("--outdir", default=os.path.expanduser("~/Documents"), help="where to write reports")
     ap.add_argument("--stamp", default=date.today().isoformat())
-    ap.add_argument("--max-fraction", type=float, default=0.5, help="abort if closing more than this fraction")
+    ap.add_argument("--max-fraction", type=float,
+                    default=tabkit.config()["limits"]["max_close_fraction"],
+                    help="abort if closing more than this fraction "
+                         "(config: limits.max_close_fraction)")
     args = ap.parse_args(argv)
 
     report = tabkit.read_session()

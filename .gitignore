@@ -5,6 +5,16 @@
 # exports are never committed: only synthetic fixtures under data/sample/ are.
 # ---------------------------------------------------------------------------
 
+# Local, machine-specific rules (site lists, redaction hosts).
+# The example lives in tabkit.toml and IS committed; local copies never are.
+tabkit.local.toml
+*.local.toml
+.config/tabkit/
+
+# Redacted-for-sharing exports are still derived from real browsing.
+tabs-*-shareable.md
+*shareable*.md
+
 # Real tab exports and archives
 tabs-*.md
 tabs-*.txt

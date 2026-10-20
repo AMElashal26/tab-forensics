@@ -41,9 +41,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", help="file containing one URL per line")
     ap.add_argument("--domain", help="only reopen URLs on this domain")
-    ap.add_argument("--limit", type=int, default=25, help="max URLs to open this run")
+    cfg_open, cfg_limits = tabkit.config()["open"], tabkit.config()["limits"]
+    ap.add_argument("--limit", type=int, default=cfg_open["default_batch"],
+                    help="max URLs to open this run (config: open.default_batch)")
     ap.add_argument("--batch", type=int, default=1, help="tabs per window")
-    ap.add_argument("--delay", type=float, default=0.35, help="seconds between tabs")
+    ap.add_argument("--delay", type=float, default=cfg_open["per_tab_delay_seconds"],
+                    help="seconds between tabs (config: open.per_tab_delay_seconds)")
     ap.add_argument("--list", action="store_true", help="list available domains and exit")
     ap.add_argument("--apply", action="store_true", help="actually open (default: dry run)")
     args = ap.parse_args(argv)

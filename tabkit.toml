@@ -1,0 +1,121 @@
+# ---------------------------------------------------------------------------
+# tabkit example configuration
+# ---------------------------------------------------------------------------
+#
+# Copy this file to `tabkit.local.toml` (git-ignored) and edit the copy.
+# The local file overrides, and never leaves your machine.
+#
+#   cp tabkit.toml tabkit.local.toml
+#
+# Resolution order, highest priority first:
+#
+#   1. $TABKIT_CONFIG
+#   2. ./tabkit.local.toml
+#   3. ~/.config/tabkit/config.toml
+#   4. built-in defaults (this file's values, minus the site-specific entries)
+#
+# Every key is optional. A missing or unparseable file is not an error: the
+# built-in defaults are used instead, so the toolkit always runs.
+# ---------------------------------------------------------------------------
+
+
+[wrapper]
+# Query-string parameters that carry the original URL inside a wrapper page.
+# Order matters: the first non-empty match wins.
+carrier_params = ["uri", "url"]
+
+# Maximum nesting depth when unwrapping. Two suspenders installed at once
+# produces two layers; 5 leaves generous headroom without risking a cycle.
+max_depth = 5
+
+# Detectors are tried in order. `match` is a case-insensitive substring test
+# against the whole URL. `name` is only used in reports.
+#
+# Only generic, publicly-documented wrappers belong in this file. Put anything
+# specific to your own setup in tabkit.local.toml.
+[[wrapper.detector]]
+name = "generic_suspender_extension"
+match = "suspended.html"
+
+# The two widely-installed suspenders, by published extension id. These are
+# public identifiers, not personal data, so they ship as defaults.
+[[wrapper.detector]]
+name = "workona"
+match = "workona.com/suspended"
+
+[[wrapper.detector]]
+name = "great_suspender"
+match = "noogafoofpebimajpfpamcfhoaifemoa"
+
+[[wrapper.detector]]
+name = "marvelous_suspender"
+match = "plpkmjcnhhnpkblimgenmdhghfgghdpp"
+
+
+[dedupe]
+# Prefixes that carry no information worth keeping as a tab of their own.
+# Matching tabs are dropped from the deduplication key set so they can never
+# become the "survivor" of a group.
+meaningless_prefixes = [
+    "chrome://newtab",
+    "chrome://new-tab-page",
+]
+
+# Collapse a trailing slash that sits immediately before a query string, so
+# /page/?id=1 and /page?id=1 dedupe to the same key.
+collapse_trailing_slash_before_query = true
+
+# Treat the fragment (#section) as significant when deduplicating. Set false
+# for sites that use fragments for scroll position within the same document.
+fragments_are_significant = true
+
+# Strip a leading "www." when building dedupe keys, so www.x.com/a and
+# x.com/a collapse into one. Off by default because it changes how keys are
+# constructed; turn it on for a more aggressive pass on a fresh session.
+strip_www_prefix = false
+
+
+[privacy]
+# Hosts whose identity is replaced with a stable placeholder before any export
+# intended for sharing. The rest of the URL is preserved so the structure
+# remains reviewable.
+#
+# Example: with "internal.example.com" listed, a tab pointing at
+#   https://internal.example.com/wiki/onboarding
+# becomes
+#   https://host-1.redacted/wiki/onboarding
+#
+# This runs only when a script is asked for a redacted artifact. Normal
+# archives are never altered.
+redact_hosts = []
+
+# Replace absolute local file paths (file:///Users/<name>/... ) with a
+# placeholder. Enabled by default because home-directory paths leak an account
+# name even when the tabs themselves are mundane.
+redact_local_paths = true
+
+# Placeholder used for the account-name segment of a local path.
+local_path_placeholder = "<user>"
+
+
+[open]
+# Pacing for reopening tabs, to avoid re-triggering the overload the toolkit
+# exists to clean up. Batch size is the single most important knob here.
+default_batch = 20
+
+# Seconds to wait between opening each tab.
+per_tab_delay_seconds = 0.35
+
+# Seconds to wait between batches.
+per_batch_delay_seconds = 3.0
+
+
+[limits]
+# Refuse to close more than this fraction of a session in one run. A guard
+# against a parsing bug turning into a mass closure.
+max_close_fraction = 0.40
+
+# Abort a close operation if the session appears to have shrunk below this
+# many tabs between the archive step and the close step, which would indicate
+# the browser dropped tabs or the read was truncated.
+min_session_tabs = 5
