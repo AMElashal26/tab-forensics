@@ -41,12 +41,23 @@ LF = chr(10)
 
 
 def html_escape(text: str) -> str:
-    """Escape text for use in HTML text nodes and double-quoted attributes."""
+    """Escape text for use in HTML text nodes and double-quoted attributes.
+
+    The backslash is escaped even though HTML does not require it. Tab titles
+    are real page titles and occasionally contain one -- a site whose <title>
+    uses a backslash as a separator, for instance. Because the whole-document
+    invariant asserted in :func:`write_board` is load-bearing for script
+    safety, emitting the numeric entity keeps that invariant true for *any*
+    input instead of letting a legitimate title fail the build. The entity
+    renders as a backslash, so the displayed title is unchanged, and
+    ``getAttribute`` returns a real backslash, so filtering still matches.
+    """
     if not text:
         return "(untitled)"
     text = " ".join(text.replace(LF, " ").split())
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     text = text.replace('"', "&quot;").replace("'", "&#39;")
+    text = text.replace(chr(92), "&#92;")
     return text or "(untitled)"
 
 
@@ -275,11 +286,44 @@ def build_board(
 
 
 def write_board(tabs: Iterable[Tab], path: str, **kwargs) -> str:
-    """Build, validate and durably write a board. Returns the path written."""
+    """Build, validate and durably write a board. Returns the path written.
+
+    Two separate invariants are checked, and they are not the same claim:
+
+    1. The **script block** must contain no backslash. This is the one that
+       matters: a stray escape inside a JS string literal makes the whole
+       script fail to parse, which silently disables every control on the page
+       while the HTML still renders. Checked directly against the script.
+
+    2. The **document** must contain no backslash. This is a stronger, simpler
+       invariant that makes (1) trivially true, and it holds because
+       ``html_escape`` emits the numeric entity for any backslash in tab data.
+
+    An earlier version asserted only (2), with a message explaining (1). The
+    scope and the reasoning disagreed, so a single legitimate tab title ended
+    the build with a message about scripts that was not true of the failing
+    text. Checking the actual invariant first, and keeping the document check
+    as a canary for escaping regressions, keeps both claims honest.
+    """
     validate_javascript(build_javascript())
     html = build_board(tabs, **kwargs)
+
+    start = html.find("<script>")
+    end = html.find("</script>")
+    script = html[start : end if end != -1 else len(html)]
+    if chr(92) in script:
+        raise AssertionError(
+            "generated script contains a backslash; the page's controls would "
+            "silently do nothing"
+        )
+
     if chr(92) in html:
-        raise AssertionError("board contains a backslash; scripts would break")
+        bad = html.index(chr(92))
+        raise AssertionError(
+            "board contains a backslash outside the script block, so escaping "
+            "has a gap; offending context: " + repr(html[max(0, bad - 40) : bad + 40])
+        )
+
     write_text(path, html)
     return path
 

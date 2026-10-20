@@ -392,6 +392,70 @@ class TestBoardGeneration(unittest.TestCase):
         self.assertIn("https://docs.github.com/en", html)
         self.assertNotIn("workona.com/suspended", html)
 
+    # -----------------------------------------------------------------------
+    # Regression: a legitimate tab title ended the build.
+    # -----------------------------------------------------------------------
+
+    def test_title_containing_a_backslash_does_not_break_the_build(self):
+        """A real page title used a backslash as a separator. HTML does not
+        require escaping it, so it reached the output and tripped the
+        whole-document assertion -- failing a build whose data was fine. The
+        backslash is now emitted as a numeric entity."""
+        tabs = [
+            tabkit.Tab(
+                window=1,
+                index=1,
+                title="Our work on the hard questions | Anthropic" + chr(92) + " Anthropic",
+                raw_url="https://www.anthropic.com/news/example",
+            )
+        ]
+        html = build_board.build_board(tabs)
+        self.assertNotIn(chr(92), html)
+        self.assertIn("&#92;", html)
+
+    def test_escaped_backslash_still_renders_and_filters_correctly(self):
+        """The entity must decode back to a real backslash, or search would
+        stop matching titles that contain one."""
+        import html as html_module
+
+        raw = "Left" + chr(92) + "Right"
+        escaped = build_board.html_escape(raw)
+        self.assertNotIn(chr(92), escaped)
+        self.assertEqual(html_module.unescape(escaped), raw)
+
+    def test_backslash_in_a_url_does_not_break_the_build(self):
+        tabs = [
+            tabkit.Tab(window=1, index=1, title="Odd", raw_url="https://x.com/a" + chr(92) + "b")
+        ]
+        html = build_board.build_board(tabs)
+        self.assertNotIn(chr(92), html)
+
+    def test_document_invariant_still_holds_for_hostile_titles(self):
+        """Sweep characters that could plausibly appear in a title."""
+        nasties = [
+            chr(92),
+            chr(92) + chr(92),
+            chr(92) + "n",
+            "</script><script>alert(1)</script>",
+            "quote \" and ' apostrophe",
+            "amp & lt < gt >",
+            chr(92) + "x" + chr(92),
+        ]
+        for bad in nasties:
+            with self.subTest(title=bad[:20]):
+                tabs = [tabkit.Tab(window=1, index=1, title=bad, raw_url="https://x.com/p")]
+                html = build_board.build_board(tabs)
+                self.assertNotIn(chr(92), html)
+                self.assertNotIn("<script>alert(1)</script>", html)
+
+    def test_script_invariant_is_checked_separately_from_the_document(self):
+        """The assertion message must describe the invariant it actually tests.
+        Injecting a comment with a backslash into the page must be attributed to
+        the document, not blamed on scripts that are provably clean."""
+        js = build_board.build_javascript()
+        self.assertNotIn(chr(92), js)
+        self.assertTrue(build_board.validate_javascript(js))
+
 
 class TestConfig(unittest.TestCase):
     """The rules live in a file, so the file's failure modes are behaviour."""
